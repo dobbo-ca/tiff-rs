@@ -1,0 +1,113 @@
+//go:build !purego
+
+#include "textflag.h"
+
+// Per block of n bytes in 64-byte steps:
+//   s2 += n*s1 + 64*sum(s1 before each step) + sum((64-j)*col[j])
+//   s1 += sum(p)
+// n fits NMAX, so no lane overflows; col[j] < 2^16.
+// R0 p, R1 bytes left, R2 s2, R3 s1, R6 block end.
+// V16 s1 sums, V17 prefix s1 sums, V20-V27 column sums.
+
+// Column weights 64..1, halfwords.
+DATA weights<>+0x00(SB)/8, $0x003d003e003f0040
+DATA weights<>+0x08(SB)/8, $0x0039003a003b003c
+DATA weights<>+0x10(SB)/8, $0x0035003600370038
+DATA weights<>+0x18(SB)/8, $0x0031003200330034
+DATA weights<>+0x20(SB)/8, $0x002d002e002f0030
+DATA weights<>+0x28(SB)/8, $0x0029002a002b002c
+DATA weights<>+0x30(SB)/8, $0x0025002600270028
+DATA weights<>+0x38(SB)/8, $0x0021002200230024
+DATA weights<>+0x40(SB)/8, $0x001d001e001f0020
+DATA weights<>+0x48(SB)/8, $0x0019001a001b001c
+DATA weights<>+0x50(SB)/8, $0x0015001600170018
+DATA weights<>+0x58(SB)/8, $0x0011001200130014
+DATA weights<>+0x60(SB)/8, $0x000d000e000f0010
+DATA weights<>+0x68(SB)/8, $0x0009000a000b000c
+DATA weights<>+0x70(SB)/8, $0x0005000600070008
+DATA weights<>+0x78(SB)/8, $0x0001000200030004
+GLOBL weights<>(SB), RODATA|NOPTR, $128
+
+// func updateNEON(adler uint32, p []byte) uint32
+TEXT ·updateNEON(SB), NOSPLIT, $0-36
+	MOVWU adler+0(FP), R2
+	MOVD  p_base+8(FP), R0
+	MOVD  p_len+16(FP), R1
+	AND   $0xffff, R2, R3
+	LSR   $16, R2, R2
+	MOVD  $weights<>(SB), R4
+	VLD1.P 64(R4), [V8.H8, V9.H8, V10.H8, V11.H8]
+	VLD1  (R4), [V12.H8, V13.H8, V14.H8, V15.H8]
+	MOVD  $65521, R9
+	MOVD  $5504, R10 // 86*64
+
+block:
+	CMP  R10, R1
+	CSEL LO, R1, R10, R5
+	SUB  R5, R1, R1
+	MADD R5, R2, R3, R2
+	ADD  R0, R5, R6
+	VEOR V16.B16, V16.B16, V16.B16
+	VEOR V17.B16, V17.B16, V17.B16
+	VEOR V18.B16, V18.B16, V18.B16
+	VEOR V20.B16, V20.B16, V20.B16
+	VEOR V21.B16, V21.B16, V21.B16
+	VEOR V22.B16, V22.B16, V22.B16
+	VEOR V23.B16, V23.B16, V23.B16
+	VEOR V24.B16, V24.B16, V24.B16
+	VEOR V25.B16, V25.B16, V25.B16
+	VEOR V26.B16, V26.B16, V26.B16
+	VEOR V27.B16, V27.B16, V27.B16
+
+loop:
+	VLD1.P  64(R0), [V0.B16, V1.B16, V2.B16, V3.B16]
+	VADD    V16.S4, V17.S4, V17.S4
+	WORD    $0x6e202804 // uaddlp v4.8h, v0.16b
+	WORD    $0x6e206824 // uadalp v4.8h, v1.16b
+	WORD    $0x6e206844 // uadalp v4.8h, v2.16b
+	WORD    $0x6e206864 // uadalp v4.8h, v3.16b
+	WORD    $0x6e606890 // uadalp v16.4s, v4.8h
+	VUADDW  V0.B8, V20.H8, V20.H8
+	VUADDW2 V0.B16, V21.H8, V21.H8
+	VUADDW  V1.B8, V22.H8, V22.H8
+	VUADDW2 V1.B16, V23.H8, V23.H8
+	VUADDW  V2.B8, V24.H8, V24.H8
+	VUADDW2 V2.B16, V25.H8, V25.H8
+	VUADDW  V3.B8, V26.H8, V26.H8
+	VUADDW2 V3.B16, V27.H8, V27.H8
+	CMP     R6, R0
+	BNE     loop
+
+	VUMLAL  V20.H4, V8.H4, V18.S4
+	VUMLAL2 V20.H8, V8.H8, V18.S4
+	VUMLAL  V21.H4, V9.H4, V18.S4
+	VUMLAL2 V21.H8, V9.H8, V18.S4
+	VUMLAL  V22.H4, V10.H4, V18.S4
+	VUMLAL2 V22.H8, V10.H8, V18.S4
+	VUMLAL  V23.H4, V11.H4, V18.S4
+	VUMLAL2 V23.H8, V11.H8, V18.S4
+	VUMLAL  V24.H4, V12.H4, V18.S4
+	VUMLAL2 V24.H8, V12.H8, V18.S4
+	VUMLAL  V25.H4, V13.H4, V18.S4
+	VUMLAL2 V25.H8, V13.H8, V18.S4
+	VUMLAL  V26.H4, V14.H4, V18.S4
+	VUMLAL2 V26.H8, V14.H8, V18.S4
+	VUMLAL  V27.H4, V15.H4, V18.S4
+	VUMLAL2 V27.H8, V15.H8, V18.S4
+	VSHL    $6, V17.S4, V17.S4
+	VADD    V17.S4, V18.S4, V18.S4
+	VADDV   V18.S4, V18
+	VMOV    V18.S[0], R7
+	ADD     R7, R2, R2
+	VADDV   V16.S4, V16
+	VMOV    V16.S[0], R7
+	ADD     R7, R3, R3
+	UDIV    R9, R3, R7
+	MSUB    R7, R3, R9, R3
+	UDIV    R9, R2, R7
+	MSUB    R7, R2, R9, R2
+	CBNZ    R1, block
+
+	ORR  R2<<16, R3, R2
+	MOVW R2, ret+32(FP)
+	RET

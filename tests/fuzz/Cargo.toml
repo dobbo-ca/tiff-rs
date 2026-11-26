@@ -1,0 +1,78 @@
+[package]
+name = "tiff-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tiff = { path = "../.." }
+
+# Not part of the root package: only this crate may depend on libfuzzer-sys.
+[workspace]
+
+[[bin]]
+name = "open_decode"
+path = "fuzz_targets/open_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "codec_chunk"
+path = "fuzz_targets/codec_chunk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "entries"
+path = "fuzz_targets/entries.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reuse"
+path = "fuzz_targets/reuse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "limits"
+path = "fuzz_targets/limits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "readat"
+path = "fuzz_targets/readat.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "threads"
+path = "fuzz_targets/threads.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "chunk"
+path = "fuzz_targets/chunk.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "raw_jpeg"
+path = "fuzz_targets/raw_jpeg.rs"
+test = false
+doc = false
+bench = false

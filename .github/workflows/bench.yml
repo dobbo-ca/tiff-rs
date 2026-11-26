@@ -1,0 +1,34 @@
+name: bench
+on: { workflow_dispatch: {}, push: { branches: [main] } }
+permissions:
+  contents: read
+# A new run waits for the one before it; it never cancels it (a measurement).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  # Not a required check. The Go and Rust decodes of the inputs run in one container, so the
+  # ratio compares the same machine. Hosted runners are shared VMs: the times are noisy.
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: bench
+          load: true
+          push: false
+          tags: tiff-bench:local
+          cache-from: type=gha,scope=tiff-rs-bench
+          cache-to: type=gha,mode=max,scope=tiff-rs-bench
+      # docker run, not a RUN layer: a BuildKit cache hit would skip the timing.
+      - shell: bash # -eo pipefail: a failing bench.sh fails the step behind the tee
+        run: |
+          { echo '## Decode time, ms per MB of output (lower is better)'; echo
+            echo "Runner: ubuntu-24.04 (GitHub-hosted, $(nproc) vCPU)"; echo
+            docker run --rm tiff-bench:local sh tests/parity/bench.sh; } | tee -a "$GITHUB_STEP_SUMMARY"

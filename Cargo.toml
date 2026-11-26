@@ -1,0 +1,27 @@
+[package]
+name = "tiff"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "MIT"
+description = "Multi-page TIFF and BigTIFF decoder with strict resource limits. Rust port of github.com/dobbo-ca/tiff-go."
+publish = false
+
+# Both are git dependencies pinned by rev (not on crates.io).
+[dependencies]
+deflate = { git = "https://github.com/dobbo-ca/deflate-rs", rev = "211232f521f4378efd74f224df2fc05213cec94a" }
+jpeg = { git = "https://github.com/dobbo-ca/jpeg-rs", rev = "c0cf0fcc3a5c4284bf09615cea44660247f07e99" }
+
+# The worker pool (see jpeg-rs): safe Rust cannot reuse a thread for jobs that borrow short-lived
+# buffers, and rayon's scope can.
+rayon = "=1.12.0"
+
+# The tests decode and encode whole images (jpeg-rs); the dependencies run optimised under
+# `cargo test`, this crate keeps overflow checks and debug assertions.
+[profile.dev.package."*"]
+opt-level = 2
+
+# One codegen unit, so the decode loops inline across modules (jpeg-rs's docs/benchmarks.md asks dependents
+# to set this for `jpeg`; its kernels are slower with the default 16 units).
+[profile.release]
+codegen-units = 1

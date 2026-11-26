@@ -1,0 +1,78 @@
+name: fuzz
+on:
+  schedule: [{ cron: '23 6 * * 3' }]
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: Seconds per target
+        default: '600'
+permissions:
+  contents: read
+# A new run waits for the one before it; it does not cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  # Every target on x86_64 (ubuntu-24.04) and on native aarch64 (ubuntu-24.04-arm), with ASan.
+  fuzz:
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      # Two fuzz jobs at a time, at most.
+      max-parallel: 2
+      matrix:
+        arch: [x64, arm64]
+        target: [open_decode, codec_chunk, entries, reuse, limits, readat, threads, chunk, raw_jpeg]
+    timeout-minutes: 60
+    env:
+      MAX_TOTAL_TIME: ${{ inputs.max_total_time || '600' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: fuzz
+          load: true
+          push: false
+          tags: tiff-fuzz:local
+          cache-from: type=gha,scope=tiff-rs-fuzz-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=tiff-rs-fuzz-${{ matrix.arch }}
+      # The corpus is kept between runs: restored here, copied into the container, copied back
+      # out and saved, so a run goes on from where the last one stopped. One cache per target and
+      # architecture; the newest is restored.
+      - id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: corpus
+          key: fuzz-corpus-${{ matrix.arch }}-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.arch }}-${{ matrix.target }}-
+      # docker create + start, not a RUN layer: a BuildKit cache hit would skip the fuzzing.
+      # Seeds: the tiff-go testdata/fuzz entry and the JPEG chunks (tests/fuzz/seeds), and the Go TIFF files
+      # (tests/data/golden, tests/data/synthetic); new inputs go to the first corpus dir. The targets run
+      # under limits that keep one input under -malloc_limit_mb, and fail an input that allocates over 96 MiB or
+      # takes over 5 s per budgeted run (tiff-go's FuzzTIFF bounds, with the time scaled for the sanitizer). -timeout is the
+      # hard stop and must exceed the target's budgeted runs x 5 s: threads makes 7, readat 3, limits 2 (see tests/fuzz/common.rs).
+      - run: |
+          mkdir -p corpus/${{ matrix.target }}
+          case ${{ matrix.target }} in threads) T=40 ;; readat) T=16 ;; limits) T=11 ;; *) T=10 ;; esac
+          docker create --name fuzz -e MAX_TOTAL_TIME -e TARGET=${{ matrix.target }} -e T tiff-fuzz:local \
+            sh -c 'cargo +nightly fuzz run --fuzz-dir tests/fuzz $TARGET tests/fuzz/corpus/$TARGET tests/fuzz/seeds tests/data/golden tests/data/synthetic -- -max_total_time=$MAX_TOTAL_TIME -timeout=$T -rss_limit_mb=2048 -malloc_limit_mb=512'
+          docker cp corpus fuzz:/src/tests/fuzz/
+          docker start -a fuzz
+      - if: failure()
+        run: docker cp fuzz:/src/tests/fuzz/artifacts/${{ matrix.target }} ./crashers
+      - if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: crashers-${{ matrix.target }}-${{ matrix.arch }}
+          path: crashers
+      - if: always()
+        run: docker cp fuzz:/src/tests/fuzz/corpus/${{ matrix.target }}/. corpus/${{ matrix.target }}/ || true
+      - if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: corpus
+          key: fuzz-corpus-${{ matrix.arch }}-${{ matrix.target }}-${{ github.run_id }}

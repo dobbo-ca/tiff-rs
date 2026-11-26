@@ -1,0 +1,34 @@
+name: pgo
+# Dev tool, not a check, dispatch only: the bench example built with cargo-pgo (trained on the
+# benchmark inputs), and through BOLT when the image has it, timed against the default build with
+# tests/parity/bench.sh. The table is in the job summary. docs/parity.md.
+on: { workflow_dispatch: {} }
+permissions:
+  contents: read
+# A new run waits for the one before it; it never cancels it (a measurement, like bench).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  pgo:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { lfs: false, persist-credentials: false }
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: .github/ci/Dockerfile
+          target: pgo
+          load: true
+          push: false
+          cache-from: type=gha,scope=tiff-rs-pgo
+          cache-to: type=gha,mode=max,scope=tiff-rs-pgo
+          tags: tiff-pgo:local
+      # docker run, not a RUN layer: a BuildKit cache hit would skip the timing.
+      - shell: bash # -eo pipefail: a real pgo.sh failure fails the step behind the tee
+        run: |
+          { echo '### Rust ms per MB of output: default, PGO and PGO plus BOLT builds'; echo
+            docker run --rm tiff-pgo:local sh tests/parity/pgo.sh; } | tee -a "$GITHUB_STEP_SUMMARY"
